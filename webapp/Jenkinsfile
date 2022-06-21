@@ -1,0 +1,77 @@
+pipeline {
+    agent any
+    
+    tools {
+      jdk 'JAVA_1.8'
+      maven 'MAVEN_3.5.2'
+      git 'Default'
+    }
+
+    stages {
+        stage('checkout') {
+            steps {
+                git branch:'developer', credentialsId: 'GITHUB_CREDENTIALS', poll: false, url: 'https://github.com/bmanikantareddy/hello-world-webapp.git'
+            }
+        }
+        
+        stage('Build') {
+            steps {
+                sh 'mvn -B -DskipTests clean '
+            }
+        }
+        
+        stage('Test') {
+            steps {
+                sh 'mvn test'
+            }
+            post {
+                always {
+                    junit 'server/target/surefire-reports/*.xml'
+                }
+            }
+        }
+
+        stage('Sonar_Scan') {
+            steps {
+                withSonarQubeEnv(installationName:'SONAR_QUBE', credentialsId: 'SONAR_CREDENTIAL') { 
+                sh 'mvn clean org.sonarsource.scanner.maven:sonar-maven-plugin:3.9.0.2155:sonar'
+                }
+            }
+        }
+
+        stage('package') {
+            steps {
+                sh 'mvn -B -DskipTests package'
+            }
+        }
+        
+        stage('deploy_tomcat') {
+            steps {
+                echo 'deploying to tomcat'
+                sshagent(['ubuntu-aws-ec2-token']) {
+                    sh "scp -o StrictHostKeyChecking=no webapp/target/webapp.war ubuntu@3.84.54.232:/opt/tomcat/webapps"
+                }
+            }
+        }
+        
+        stage('docker_build'){
+            steps {
+                dir('webapp/target') {
+                    sh 'pwd'
+                    sh 'ls -al'
+                    sh "docker build -t hello-webapp:1.0 -f ${WORKSPACE}/Dockerfile ."
+                    // Tag and push to some docker registry
+                }
+            }
+        }
+        
+        stage('docker_run'){
+            steps {
+               sh "docker stop hello_world && docker rm hello_world || exit 0 "
+               sh "docker run --name hello_world -d -p 9000:8080/tcp  hello-webapp:1.0"
+               sh "sleep 4"
+               sh "curl -I http://ec2-3-236-241-237.compute-1.amazonaws.com:9000/webapp/"
+            }
+        }
+    }
+}
